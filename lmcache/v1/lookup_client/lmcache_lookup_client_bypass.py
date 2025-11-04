@@ -6,15 +6,27 @@ from typing import TYPE_CHECKING, Optional, Union
 import torch
 
 # First Party
-from lmcache.integration.vllm.utils import create_lmcache_metadata
 from lmcache.logging import init_logger
 from lmcache.v1.cache_engine import LMCacheEngine
 from lmcache.v1.config import LMCacheEngineConfig
 from lmcache.v1.lookup_client.abstract_client import LookupClientInterface
 
-if TYPE_CHECKING:
-    # Third Party
-    from vllm.config import VllmConfig
+# Detect which engine is being used and import appropriate utils
+try:
+    from nova.config import NovaConfig
+    from lmcache.integration.nova.utils import create_lmcache_metadata
+    EngineConfig = NovaConfig
+    ENGINE_TYPE = "nova"
+except ImportError:
+    try:
+        from vllm.config import VllmConfig
+        from lmcache.integration.vllm.utils import create_lmcache_metadata
+        EngineConfig = VllmConfig
+        ENGINE_TYPE = "vllm"
+    except ImportError:
+        EngineConfig = None
+        ENGINE_TYPE = None
+        create_lmcache_metadata = None
 
 logger = init_logger(__name__)
 
@@ -28,17 +40,17 @@ class LMCacheBypassLookupClient(LookupClientInterface):
 
     def __init__(
         self,
-        vllm_config: "VllmConfig",
+        engine_config: "EngineConfig",
         lmcache_engine: LMCacheEngine,
     ):
         """
         Initialize the bypass lookup client.
 
         Args:
-            vllm_config: The vLLM configuration
+            engine_config: The vLLM configuration
             lmcache_engine: The LMCacheEngine instance to use for lookups
         """
-        metadata, config = create_lmcache_metadata(vllm_config)
+        metadata, config = create_lmcache_metadata(engine_config)
 
         assert isinstance(config, LMCacheEngineConfig), (
             "LMCache v1 configuration should be passed."

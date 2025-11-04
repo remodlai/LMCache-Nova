@@ -20,9 +20,19 @@ from lmcache.v1.rpc_utils import (
     get_zmq_socket,
 )
 
-if TYPE_CHECKING:
-    # Third Party
-    from vllm.config import VllmConfig
+# Detect which engine is being used
+try:
+    from nova.config import NovaConfig
+    EngineConfig = NovaConfig
+    ENGINE_TYPE = "nova"
+except ImportError:
+    try:
+        from vllm.config import VllmConfig
+        EngineConfig = VllmConfig
+        ENGINE_TYPE = "vllm"
+    except ImportError:
+        EngineConfig = None
+        ENGINE_TYPE = None
 
 logger = init_logger(__name__)
 
@@ -44,18 +54,18 @@ class LMCacheLookupClient(LookupClientInterface):
 
     def __init__(
         self,
-        vllm_config: "VllmConfig",
+        engine_config: EngineConfig,
     ):
-        metadata, config = create_lmcache_metadata(vllm_config)
+        metadata, config = create_lmcache_metadata(engine_config)
 
         self.encoder = msgspec.msgpack.Encoder()
         self.ctx = get_zmq_context(use_asyncio=False)
         self.config = config
-        rpc_port = vllm_config.kv_transfer_config.get_from_extra_config(
+        rpc_port = engine_config.kv_transfer_config.get_from_extra_config(
             "lmcache_rpc_port", 0
         )
-        self.pipeline_parallel_size = vllm_config.parallel_config.pipeline_parallel_size
-        self.tensor_parallel_size = vllm_config.parallel_config.tensor_parallel_size
+        self.pipeline_parallel_size = engine_config.parallel_config.pipeline_parallel_size
+        self.tensor_parallel_size = engine_config.parallel_config.tensor_parallel_size
         self.num_ranks = self.tensor_parallel_size * self.pipeline_parallel_size
         self.lookup_server_worker_ids = config.get_lookup_server_worker_ids(
             metadata.use_mla, metadata.world_size
@@ -211,14 +221,14 @@ class LMCacheLookupClient(LookupClientInterface):
 class LMCacheLookupServer:
     """ZMQ-based lookup server that handles lookup requests using LMCacheEngine."""
 
-    def __init__(self, lmcache_engine: LMCacheEngine, vllm_config: "VllmConfig"):
+    def __init__(self, lmcache_engine: LMCacheEngine, engine_config: EngineConfig):
         self.decoder = msgspec.msgpack.Decoder()
         self.ctx = zmq.Context()  # type: ignore[attr-defined]
-        rpc_port = vllm_config.kv_transfer_config.get_from_extra_config(
+        rpc_port = engine_config.kv_transfer_config.get_from_extra_config(
             "lmcache_rpc_port", 0
         )
         socket_path = get_zmq_rpc_path_lmcache(
-            vllm_config, "lookup", rpc_port, vllm_config.parallel_config.rank
+            engine_config, "lookup", rpc_port, engine_config.parallel_config.rank
         )
         self.socket = get_zmq_socket(
             self.ctx,

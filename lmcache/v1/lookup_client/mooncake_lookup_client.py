@@ -11,9 +11,19 @@ from lmcache.utils import CacheEngineKey
 from lmcache.v1.config import LMCacheEngineConfig
 from lmcache.v1.lookup_client.abstract_client import LookupClientInterface
 
-if TYPE_CHECKING:
-    # Third Party
-    from vllm.config import VllmConfig
+# Detect which engine is being used
+try:
+    from nova.config import NovaConfig
+    EngineConfig = NovaConfig
+    ENGINE_TYPE = "nova"
+except ImportError:
+    try:
+        from vllm.config import VllmConfig
+        EngineConfig = VllmConfig
+        ENGINE_TYPE = "vllm"
+    except ImportError:
+        EngineConfig = None
+        ENGINE_TYPE = None
 
 logger = init_logger(__name__)
 
@@ -21,7 +31,7 @@ logger = init_logger(__name__)
 class MooncakeLookupClient(LookupClientInterface):
     def __init__(
         self,
-        vllm_config: "VllmConfig",
+        engine_config: "EngineConfig",
         master_addr: str,
     ):
         # Third Party
@@ -42,7 +52,7 @@ class MooncakeLookupClient(LookupClientInterface):
         # First Party
         from lmcache.integration.vllm.utils import create_lmcache_metadata
 
-        metadata, config = create_lmcache_metadata(vllm_config)
+        metadata, config = create_lmcache_metadata(engine_config)
 
         assert isinstance(config, LMCacheEngineConfig), (
             "LMCache v1 configuration is should be passed."

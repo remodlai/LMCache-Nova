@@ -10,9 +10,19 @@ import zmq.asyncio
 # First Party
 from lmcache.logging import init_logger
 
-if TYPE_CHECKING:
-    # Third Party
-    from vllm.config import VllmConfig
+# Detect which engine is being used
+try:
+    from nova.config import NovaConfig
+    EngineConfig = NovaConfig
+    ENGINE_TYPE = "nova"
+except ImportError:
+    try:
+        from vllm.config import VllmConfig
+        EngineConfig = VllmConfig
+        ENGINE_TYPE = "vllm"
+    except ImportError:
+        EngineConfig = None
+        ENGINE_TYPE = None
 
 logger = init_logger(__name__)
 
@@ -78,16 +88,21 @@ def get_ip():
 
 
 def get_zmq_rpc_path_lmcache(
-    vllm_config: Optional["VllmConfig"] = None,
+    engine_config: Optional[EngineConfig] = None,
     service_name: ServiceKind = "lookup",
     rpc_port: int = 0,
     rank: int = 0,
 ) -> str:
     """Get the ZMQ RPC path for LMCache lookup and offload communication."""
-    # Third Party
-    import vllm.envs as envs
+    # Import envs from appropriate engine
+    if ENGINE_TYPE == "nova":
+        import nova.envs as envs
+        rpc_base_attr = "NOVA_RPC_BASE_PATH"
+    else:
+        import vllm.envs as envs
+        rpc_base_attr = "VLLM_RPC_BASE_PATH"
 
-    if vllm_config is None or vllm_config.kv_transfer_config is None:
+    if engine_config is None or engine_config.kv_transfer_config is None:
         raise ValueError("A valid kv_transfer_config with engine_id is required.")
 
     if service_name not in {"lookup", "offload", "lookup_worker", "lookup_scheduler"}:
@@ -95,9 +110,9 @@ def get_zmq_rpc_path_lmcache(
             f"service_name must be 'lookup' or 'offload', got {service_name!r}"
         )
 
-    base_url = envs.VLLM_RPC_BASE_PATH
+    base_url = getattr(envs, rpc_base_attr, "/tmp/lmcache_zmq")
 
-    engine_id = vllm_config.kv_transfer_config.engine_id
+    engine_id = engine_config.kv_transfer_config.engine_id
 
     if isinstance(rpc_port, str):
         rpc_port = rpc_port + str(rank)

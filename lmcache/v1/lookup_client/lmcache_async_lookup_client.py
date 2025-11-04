@@ -10,7 +10,6 @@ import torch
 import zmq
 
 # First Party
-from lmcache.integration.vllm.utils import create_lmcache_metadata
 from lmcache.logging import init_logger
 from lmcache.v1.cache_engine import LMCacheEngine
 from lmcache.v1.lookup_client.abstract_client import LookupClientInterface
@@ -20,9 +19,22 @@ from lmcache.v1.rpc_utils import (
     get_zmq_socket,
 )
 
-if TYPE_CHECKING:
-    # Third Party
-    from vllm.config import VllmConfig
+# Detect which engine is being used and import appropriate utils
+try:
+    from nova.config import NovaConfig
+    from lmcache.integration.nova.utils import create_lmcache_metadata
+    EngineConfig = NovaConfig
+    ENGINE_TYPE = "nova"
+except ImportError:
+    try:
+        from vllm.config import VllmConfig
+        from lmcache.integration.vllm.utils import create_lmcache_metadata
+        EngineConfig = VllmConfig
+        ENGINE_TYPE = "vllm"
+    except ImportError:
+        EngineConfig = None
+        ENGINE_TYPE = None
+        create_lmcache_metadata = None
 
 logger = init_logger(__name__)
 
@@ -46,17 +58,17 @@ class LMCacheAsyncLookupClient(LookupClientInterface):
 
     def __init__(
         self,
-        vllm_config: "VllmConfig",
+        engine_config: EngineConfig,
     ):
-        metadata, config = create_lmcache_metadata(vllm_config)
+        metadata, config = create_lmcache_metadata(engine_config)
 
         self.encoder = msgspec.msgpack.Encoder()
         self.ctx = get_zmq_context(use_asyncio=False)
-        rpc_port = vllm_config.kv_transfer_config.get_from_extra_config(
+        rpc_port = engine_config.kv_transfer_config.get_from_extra_config(
             "lmcache_rpc_port", 0
         )
-        self.pipeline_parallel_size = vllm_config.parallel_config.pipeline_parallel_size
-        self.tensor_parallel_size = vllm_config.parallel_config.tensor_parallel_size
+        self.pipeline_parallel_size = engine_config.parallel_config.pipeline_parallel_size
+        self.tensor_parallel_size = engine_config.parallel_config.tensor_parallel_size
         self.num_ranks = self.tensor_parallel_size * self.pipeline_parallel_size
         self.lookup_server_worker_ids = config.get_lookup_server_worker_ids(
             metadata.use_mla, metadata.world_size
@@ -71,7 +83,7 @@ class LMCacheAsyncLookupClient(LookupClientInterface):
 
         for rank in ranks:
             worker_socket_path = get_zmq_rpc_path_lmcache(
-                vllm_config, "lookup_worker", rpc_port, rank
+                engine_config, "lookup_worker", rpc_port, rank
             )
             logger.info(
                 f"lmcache lookup client connect to rank {rank} "
@@ -89,7 +101,7 @@ class LMCacheAsyncLookupClient(LookupClientInterface):
             self.push_sockets.append(push_socket)
 
         scheduler_socket_path = get_zmq_rpc_path_lmcache(
-            vllm_config, "lookup_scheduler", rpc_port, 0
+            engine_config, "lookup_scheduler", rpc_port, 0
         )
         self.pull_socket = get_zmq_socket(
             self.ctx,
@@ -240,17 +252,17 @@ class LMCacheAsyncLookupServer:
     """ZMQ-based async lookup server that handles lookup and prefetch
     requests using LMCacheEngine."""
 
-    def __init__(self, lmcache_engine: LMCacheEngine, vllm_config: "VllmConfig"):
+    def __init__(self, lmcache_engine: LMCacheEngine, engine_config: EngineConfig):
         self.decoder = msgspec.msgpack.Decoder()
         self.ctx = zmq.Context()  # type: ignore[attr-defined]
-        rpc_port = vllm_config.kv_transfer_config.get_from_extra_config(
+        rpc_port = engine_config.kv_transfer_config.get_from_extra_config(
             "lmcache_rpc_port", 0
         )
         worker_socket_path = get_zmq_rpc_path_lmcache(
-            vllm_config, "lookup_worker", rpc_port, vllm_config.parallel_config.rank
+            engine_config, "lookup_worker", rpc_port, engine_config.parallel_config.rank
         )
         scheduler_socket_path = get_zmq_rpc_path_lmcache(
-            vllm_config, "lookup_scheduler", rpc_port, 0
+            engine_config, "lookup_scheduler", rpc_port, 0
         )
         self.push_socket = get_zmq_socket(
             self.ctx,

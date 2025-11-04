@@ -18,22 +18,32 @@ from lmcache.v1.rpc_utils import (
     get_zmq_socket,
 )
 
-if TYPE_CHECKING:
-    # Third Party
-    from vllm.config import VllmConfig
+# Detect which engine is being used
+try:
+    from nova.config import NovaConfig
+    EngineConfig = NovaConfig
+    ENGINE_TYPE = "nova"
+except ImportError:
+    try:
+        from vllm.config import VllmConfig
+        EngineConfig = VllmConfig
+        ENGINE_TYPE = "vllm"
+    except ImportError:
+        EngineConfig = None
+        ENGINE_TYPE = None
 
 
 class ZMQOffloadServer(OffloadServerInterface):
     def __init__(
         self,
         lmcache_engine: LMCacheEngine,
-        vllm_config: "VllmConfig",
+        engine_config: EngineConfig,
         tp_rank: int,
     ):
         self.ctx = get_zmq_context(use_asyncio=False)
         offload_rpc_port = int(os.environ.get("LMCACHE_OFFLOAD_RPC_PORT", 100))
         socket_path = get_zmq_rpc_path_lmcache(
-            vllm_config, "offload", offload_rpc_port, tp_rank
+            engine_config, "offload", offload_rpc_port, tp_rank
         )
         self.socket = get_zmq_socket(
             self.ctx,
